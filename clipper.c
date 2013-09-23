@@ -285,6 +285,10 @@ int readnext_fq(fq_file_t* fq) {
     return get_entry(fq->in, &fq->entry);
 }
 
+int done_fq(fq_file_t* fq) {
+    return fgetc(fq->in) == EOF;
+}
+
 int paranoid_dna(char* s, ssize_t len) {
     int i;
 
@@ -687,7 +691,15 @@ void process_paired(fq_file_t* files[], int num_files, options_t* opt) {
 
     // check if both files are finished, the while condition is false
     // if only one does
-    // TODO
+    if(! done_fq(left)) {
+        err("Error: %s has more lines than %s!\n", left->input_name, right->input_name);
+        //exit(EXIT_FAILURE);
+    }
+
+    if(! done_fq(right)) {
+        err("Error: %s has more lines than %s!\n", right->input_name, left->input_name);
+        //exit(EXIT_FAILURE);
+    }
 }
 
 void process_nonpaired(fq_file_t* files[], int num_files, options_t* opt) {
