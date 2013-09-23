@@ -693,12 +693,12 @@ void process_paired(fq_file_t* files[], int num_files, options_t* opt) {
     // if only one does
     if(! done_fq(left)) {
         err("Error: %s has more lines than %s!\n", left->input_name, right->input_name);
-        //exit(EXIT_FAILURE);
+        exit(EXIT_FAILURE);
     }
 
     if(! done_fq(right)) {
         err("Error: %s has more lines than %s!\n", right->input_name, left->input_name);
-        //exit(EXIT_FAILURE);
+        exit(EXIT_FAILURE);
     }
 }
 
