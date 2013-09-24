@@ -23,9 +23,11 @@ typedef enum {
 typedef struct {
     int min_length;         // filter out short reads post-soft clip
     int qual_trim;          // parameter to soft clip algorithm
-    int qual_filt;        // number of bases with QUAL < 3
+    int qual_filt;          // number of bases with QUAL < 3
+    int clip;               // number of bases to remove from begining of read
 
     filetype_t type;
+    filetype_t out_format;
     char* output_dir;
     char* suffix;
 
@@ -33,6 +35,7 @@ typedef struct {
     int remove_ambig_flg;   // filter reads containing 'N'
     int remove_adapter_flg; 
     int paranoid_flg;
+    int stdout_flg;
 
     int phred_offset;
 
@@ -86,6 +89,7 @@ void init_options(options_t* opt) {
     opt->min_length = 0;
     opt->qual_trim = -1;
     opt->qual_filt = -1;
+    opt->clip = -1;
     opt->type = CLIPPER_FASTQ;
     opt->output_dir = NULL;
     opt->suffix = NULL;
@@ -93,9 +97,11 @@ void init_options(options_t* opt) {
     opt->remove_ambig_flg = 0;
     opt->remove_adapter_flg = 0;
     opt->paranoid_flg = 1; //0;
+    opt->out_format = CLIPPER_FASTQ;
     opt->adapter = NULL;
     opt->verbose_flg = 0;
     opt->phred_offset = 33;
+    opt->stdout_flg = 0;
 }
 
 void destroy_options(options_t* opt) {
@@ -145,7 +151,9 @@ void destroy_entry(fq_entry_t* fq) {
     destroy_strbuf(&fq->qual);
 }
 
-int init_fq(fq_file_t* fq, char* dir, char* filename, char* suffix) {
+int init_fq(fq_file_t* fq, char* filename, options_t* opt) {
+    char* suffix = opt->suffix != NULL ? opt->suffix : CLIPPER_DEFAULT_SUFFIX;
+    
     fq->error = 0;
 
     if((fq->input_name = strdup(filename)) == NULL) {
@@ -153,7 +161,7 @@ int init_fq(fq_file_t* fq, char* dir, char* filename, char* suffix) {
         return -1;
     }
 
-    if(!dir) {
+    if(! opt->output_dir) {
         fq->output_name = (char*) malloc(strlen(filename) + strlen(suffix) + 1);
         if(fq->output_name == NULL) {
             err("Error: during strdup: %s\n", strerror(errno));
@@ -166,13 +174,13 @@ int init_fq(fq_file_t* fq, char* dir, char* filename, char* suffix) {
     else {
         char* tmp = basename(filename);
         
-        fq->output_name = (char*) malloc(strlen(dir) + strlen(tmp) + strlen(suffix) + 1);
+        fq->output_name = (char*) malloc(strlen(opt->output_dir) + strlen(tmp) + strlen(suffix) + 1);
         if(fq->output_name == NULL) {
             err("Error: during strdup: %s\n", strerror(errno));
             return -1;
         }
 
-        strcpy(fq->output_name, dir);
+        strcpy(fq->output_name, opt->output_dir);
         strcat(fq->output_name, tmp);
         strcat(fq->output_name, suffix);
     }
@@ -184,11 +192,16 @@ int init_fq(fq_file_t* fq, char* dir, char* filename, char* suffix) {
         return -1;
     }
 
-    fq->out = fopen(fq->output_name, "w");
-    if(fq->out == NULL) {
-        err("Error: could not open '%s' for writing: %s\n", 
-                fq->output_name, strerror(errno));
-        return -1;
+    if(opt->stdout_flg) {
+        fq->out = stdout;
+    }
+    else {
+        fq->out = fopen(fq->output_name, "w");
+        if(fq->out == NULL) {
+            err("Error: could not open '%s' for writing: %s\n", 
+                    fq->output_name, strerror(errno));
+            return -1;
+        }
     }
 
     init_entry(&fq->entry);
@@ -263,7 +276,7 @@ int get_entry(FILE* f, fq_entry_t* fq) {
         rtrim_whitespace(sb->buf, &sb->str_len);
 
         // reset start of string
-        sb->str = sb->buf;
+        sb->str = (i == 0) ? sb->buf + 1 : sb->buf;
     }
 
 /*
@@ -337,6 +350,17 @@ int process_current_fq(fq_file_t* fq, options_t* opt) {
     fq_entry_t* e = &fq->entry;
     int i,j,qual,max_val,argmax;
     char* c;
+
+    if(opt->clip > -1) {
+        if(opt->clip > e->seq.str_len)
+            return -1;
+
+        e->seq.str = e->seq.buf + opt->clip;
+        e->seq.str_len -= opt->clip;
+
+        e->qual.str = e->qual.buf + opt->clip;
+        e->qual.str_len -= opt->clip;
+    }
 
     i = -1;
     j = e->seq.str_len;
@@ -438,14 +462,24 @@ int process_current_fq(fq_file_t* fq, options_t* opt) {
     return 0;
 }
 
-int output_fq(fq_file_t* fq) {
+int output_fq(fq_file_t* fq, filetype_t out_format) {
     fq_entry_t* e = &fq->entry;
 
-    return fprintf(fq->out, 
-                "%s\n%s\n+\n%s\n", 
+    switch(out_format) {
+        case CLIPPER_FASTQ:
+            return fprintf(fq->out, 
+                "@%s\n%s\n+\n%s\n", 
                 e->id.str, 
                 e->seq.str, 
                 e->qual.str);
+        case CLIPPER_FASTA:
+            return fprintf(fq->out,
+                ">%s\n%s\n",
+                e->id.str,
+                e->seq.str);
+        default:
+            return -1;
+    }
 }
 
 void usage(const char* prog) {
@@ -457,11 +491,14 @@ void usage(const char* prog) {
             "  -p\t\t--paired\t\tpaired end reads\n"
             "  -n\t\t--filterambiguous\tfilter reads containing 'N's\n"
             "  -a STR\t--removeadapter=STR\tremove fwd adapter\n"
-            "  -t STR\t--type=STR\t\tfile type (fasta,fa,fastq,fq)\n"
+            //"  -t STR\t--type=STR\t\tfile type (fasta,fa,fastq,fq)\n"
             "  -z\t\t--phred64\t\tphred offset of 64 (default 33)\n"
             //"  -x\t\t--paranoid\t\tcheck all characters in seq + qual are within expected ranges\n"
             "  -d DIR\t--outputdir\t\tspecify output directory (default '.')\n"
-            "  -s STR\t--suffix=STR\tspecify suffix appended to output file (default = " CLIPPER_DEFAULT_SUFFIX ")\n"
+            "  -s STR\t--suffix=STR\t\tspecify suffix appended to output file (default = " CLIPPER_DEFAULT_SUFFIX ")\n"
+            "  -c INT\t--clip=INT\t\tclip off the first INT bases\n"
+            "  \t\t--fasta\t\t\toutput as fasta\n"
+            "  \t\t--stdout\t\toutput to stdout\n"
             "  -v\t\t--verbose\t\tverbose\n"
             "  -h\t\t--help\t\t\tshow this help message\n"
             "\n"
@@ -517,7 +554,7 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
     static struct option longopts[] = {
         { "softclip",        required_argument, NULL, 'q' },
         { "qualityfilter",   required_argument, NULL, 'f' },
-        { "minlength",       required_argument, NULL, 'f' },
+        { "minlength",       required_argument, NULL, 'm' },
         { "output",          required_argument, NULL, 'o' },
         { "filterambiguous", no_argument,       NULL, 'n' },
         { "removeadapter",   required_argument, NULL, 'a' },
@@ -529,12 +566,15 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
         { "paranoid",        no_argument,       NULL, 'x' },
         { "outputdir",       required_argument, NULL, 'd' },
         { "suffix",          required_argument, NULL, 's' },
+        { "clip",            required_argument, NULL, 'c' },
+        { "fasta",           no_argument,       NULL,  0  },
+        { "stdout",          no_argument,       NULL,  1  },
         { NULL, 0, NULL, 0 }
     };
 
     init_options(opt);
 
-    while((ch = getopt_long(*argc, *argv, ":q:f:m:t:a:o:pnhvzxd:s:", longopts, NULL)) != -1) {
+    while((ch = getopt_long(*argc, *argv, ":q:f:m:t:a:o:pnhvzxd:s:c:", longopts, NULL)) != -1) {
         switch(ch) {
             case 'q':
                 if(! parse_int(optarg, &opt->qual_trim)) {
@@ -552,6 +592,13 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
 
             case 'm':
                 if(! parse_int(optarg, &opt->min_length)) {
+                    err("Error: option '-%c' expects INT (read '%s')\n", ch, optarg);
+                    exit_flg = 1;
+                }
+                break;
+
+            case 'c':
+                if(! parse_int(optarg, &opt->clip)) {
                     err("Error: option '-%c' expects INT (read '%s')\n", ch, optarg);
                     exit_flg = 1;
                 }
@@ -604,6 +651,12 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
             case 'h':
                 usage(*argv[0]);
                 break;
+            case 0:
+                opt->out_format = CLIPPER_FASTA;
+                break;
+            case 1:
+                opt->stdout_flg = 1;
+                break;
             case ':':
                 err("Error: missing parameter for option '-%c'\n", optopt);
                 exit_flg = 1;
@@ -636,7 +689,7 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
         exit(EXIT_FAILURE);
 }
 
-void open_all(int num_files, char** file_names, char* dir, char* suffix, fq_file_t* files[]) {
+void open_all(int num_files, char** file_names, options_t* opt, fq_file_t* files[]) {
     int i;
     fq_file_t* f;
     
@@ -649,7 +702,7 @@ void open_all(int num_files, char** file_names, char* dir, char* suffix, fq_file
     for(i = 0; i < num_files; ++i) {
         f = *files + i;
 
-        if(init_fq(f, dir, file_names[i], suffix) < 0) {
+        if(init_fq(f, file_names[i], opt) < 0) {
             //err("Error: could not init fastq file object for %s: %s\n", 
             //        file_names[i], strerror(errno));
             exit(EXIT_FAILURE);
@@ -680,7 +733,7 @@ void process_paired(fq_file_t* files[], int num_files, options_t* opt) {
 
     while(readnext_fq(left) == 0  && readnext_fq(right) == 0) {
         if(process_current_fq(left, opt) == 0 && process_current_fq(right, opt) == 0) {
-            if(output_fq(left) < 0 || output_fq(right) < 0) {
+            if(output_fq(left, opt->out_format) < 0 || output_fq(right, opt->out_format) < 0) {
                 err("Error: write to %s failed: %s\n", 
                         left->error ? left->output_name : right->output_name, 
                         strerror(errno));
@@ -711,7 +764,7 @@ void process_nonpaired(fq_file_t* files[], int num_files, options_t* opt) {
 
         while(readnext_fq(current) == 0) {
             if(process_current_fq(current, opt) == 0) {
-                if(output_fq(current) < 0) {
+                if(output_fq(current, opt->out_format) < 0) {
                     err("Error: write to %s failed: %s\n", 
                             current->output_name, 
                             strerror(errno));
@@ -728,9 +781,8 @@ int main(int argc, char** argv) {
 
     handle_cli(&argc, &argv, &opt);
     open_all(argc, 
-             argv, 
-             opt.output_dir, 
-             opt.suffix ? opt.suffix : CLIPPER_DEFAULT_SUFFIX, 
+             argv,
+             &opt,
              &files);
 
     if(opt.paired_flg)
