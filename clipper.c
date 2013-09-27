@@ -104,9 +104,9 @@ int nucleotide2index(char dna) {
 }
 
 int trinucleotide2index(char tri[3]) {
-    return (nucleotide2index(tri[0]) << 4) + 
-           (nucleotide2index(tri[1]) << 2) + 
-           (nucleotide2index(tri[2]) << 1);
+    return (nucleotide2index(tri[0]) * 16) + 
+           (nucleotide2index(tri[1]) * 4) + 
+           (nucleotide2index(tri[2]) * 1);
 }
 
 /*
