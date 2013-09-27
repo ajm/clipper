@@ -11,6 +11,7 @@
 #include <libgen.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <math.h>
 
 
 #define CLIPPER_DEFAULT_SUFFIX ".filtered"
@@ -25,6 +26,7 @@ typedef struct {
     int qual_trim;          // parameter to soft clip algorithm
     int qual_filt;          // number of bases with QUAL < 3
     int clip;               // number of bases to remove from begining of read
+    int entropy;            // trinucleotide entropy threshold (scaled from 0-100) 
 
     filetype_t type;
     filetype_t out_format;
@@ -85,10 +87,57 @@ void err(const char* fmt, ...) {
     va_end(v);
 }
 
+int nucleotide2index(char dna) {
+    switch(dna) {
+        case 'A':
+            return 0;
+        case 'C':
+            return 1;
+        case 'G':
+            return 2;
+        case 'T':
+            return 3;
+        default:
+            err("Error: invalid dna character '%c'\n", dna);
+            exit(EXIT_FAILURE);
+    }
+}
+
+int trinucleotide2index(char tri[3]) {
+    return (nucleotide2index(tri[0]) << 4) + 
+           (nucleotide2index(tri[1]) << 2) + 
+           (nucleotide2index(tri[2]) << 1);
+}
+
+/*
+ shannon = -sum( p_i * log_2( p_i ) )
+ so max is -log_2( 1 / 64 ) = 6
+ */
+#define MAX_SHANNON_ENTROPY 6.0f
+
+int calc_shannon_entropy(char* dna, ssize_t len) {
+    int i, counts[64] = {0};
+    float tmp, total = 0.0f;
+
+    for(i = 0; i < len-1; ++i) {
+        counts[trinucleotide2index(dna + i)] += 1;
+    }
+
+    for(i = 0; i < 64; ++i) {
+        if(counts[i]) {
+            tmp = counts[i] / ((float)len-2);
+            total += (tmp * log2f(tmp));
+        }
+    }
+
+    return (int) ((-total / MAX_SHANNON_ENTROPY) * 100.0f);
+}
+
 void init_options(options_t* opt) {
-    opt->min_length = 0;
+    opt->min_length = 1;
     opt->qual_trim = -1;
     opt->qual_filt = -1;
+    opt->entropy = -1;
     opt->clip = -1;
     opt->type = CLIPPER_FASTQ;
     opt->output_dir = NULL;
@@ -406,6 +455,13 @@ int process_current_fq(fq_file_t* fq, options_t* opt) {
             if(c[i] == 'N')
                 return -1;
         }
+
+        //fprintf(stderr, "%d\n", calc_shannon_entropy(e->seq.str, e->seq.str_len));
+    }
+
+    if(opt->remove_ambig_flg && (opt->entropy > -1)) {
+        if(calc_shannon_entropy(e->seq.str, e->seq.str_len) < opt->entropy)
+            return -1;
     }
 
     // quality trim - only changes the location of '\0'
@@ -497,6 +553,7 @@ void usage(const char* prog) {
             "  -d DIR\t--outputdir\t\tspecify output directory (default '.')\n"
             "  -s STR\t--suffix=STR\t\tspecify suffix appended to output file (default = " CLIPPER_DEFAULT_SUFFIX ")\n"
             "  -c INT\t--clip=INT\t\tclip off the first INT bases\n"
+            "  -e INT\t--entropy=INT\t\tfilter out reads with entropy of trinucleotides less than INT (scale 0-100)"
             "  \t\t--fasta\t\t\toutput as fasta\n"
             "  \t\t--stdout\t\toutput to stdout\n"
             "  -v\t\t--verbose\t\tverbose\n"
@@ -567,6 +624,7 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
         { "outputdir",       required_argument, NULL, 'd' },
         { "suffix",          required_argument, NULL, 's' },
         { "clip",            required_argument, NULL, 'c' },
+        { "entropy",         required_argument, NULL, 'e' },
         { "fasta",           no_argument,       NULL,  0  },
         { "stdout",          no_argument,       NULL,  1  },
         { NULL, 0, NULL, 0 }
@@ -574,7 +632,7 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
 
     init_options(opt);
 
-    while((ch = getopt_long(*argc, *argv, ":q:f:m:t:a:o:pnhvzxd:s:c:", longopts, NULL)) != -1) {
+    while((ch = getopt_long(*argc, *argv, ":q:f:m:t:a:o:pnhvzxd:s:c:e:", longopts, NULL)) != -1) {
         switch(ch) {
             case 'q':
                 if(! parse_int(optarg, &opt->qual_trim)) {
@@ -600,6 +658,18 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
             case 'c':
                 if(! parse_int(optarg, &opt->clip)) {
                     err("Error: option '-%c' expects INT (read '%s')\n", ch, optarg);
+                    exit_flg = 1;
+                }
+                break;
+
+            case 'e':
+                if(! parse_int(optarg, &opt->entropy)) {
+                    err("Error: option '-%c' expects INT (read '%s')\n", ch, optarg);
+                    exit_flg = 1;
+                }
+
+                if(opt->entropy < 0 || opt->entropy > 100) {
+                    err("Error: argument to '-%c' must be 0--100!\n", ch);
                     exit_flg = 1;
                 }
                 break;
