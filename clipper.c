@@ -750,6 +750,12 @@ void handle_cli(int* argc, char*** argv, options_t* opt) {
         exit(EXIT_FAILURE);
     }
 */
+    
+    if((opt->entropy > -1) && ! opt->remove_ambig_flg) {
+        err("Error: cannot filter by entropy if ambiguous characters are allowed! (add -n)\n");
+        exit(EXIT_FAILURE);
+    }
+
     if(*argc == 0) {
         err("Error: you must specify at least one file!\n");
         exit(EXIT_FAILURE);
