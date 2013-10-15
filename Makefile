@@ -5,7 +5,7 @@ CFLAGS := -g -O2 -Wall -pedantic -std=c99
 CXXFLAGS := -g -O2
 LDFLAGS :=
 INCLUDES := -I. 
-LIBS := 
+LIBS := -lm
 
 OBJECTS	:= \
     clipper.o

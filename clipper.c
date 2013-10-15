@@ -553,7 +553,7 @@ void usage(const char* prog) {
             "  -d DIR\t--outputdir\t\tspecify output directory (default '.')\n"
             "  -s STR\t--suffix=STR\t\tspecify suffix appended to output file (default = " CLIPPER_DEFAULT_SUFFIX ")\n"
             "  -c INT\t--clip=INT\t\tclip off the first INT bases\n"
-            "  -e INT\t--entropy=INT\t\tfilter out reads with entropy of trinucleotides less than INT (scale 0-100)"
+            "  -e INT\t--entropy=INT\t\tfilter out reads with entropy of trinucleotides less than INT (scale 0-100)\n"
             "  \t\t--fasta\t\t\toutput as fasta\n"
             "  \t\t--stdout\t\toutput to stdout\n"
             "  -v\t\t--verbose\t\tverbose\n"
